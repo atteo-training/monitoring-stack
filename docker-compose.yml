@@ -27,9 +27,17 @@ services:
             - 8080:8080
     proxy:
         image: atteo/pluralizer-proxy:1.0
+        deploy:
+            mode: global
         ports:
             - 80:80
     api:
         image: atteo/pluralizer:1.0
+        deploy:
+            mode: replicated
+            replicas: 2
     ui:
         image: atteo/pluralizer-ui:1.0
+        deploy:
+            mode: replicated
+            replicas: 2
