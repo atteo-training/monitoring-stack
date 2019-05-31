@@ -3,18 +3,23 @@ version: '3.1'
 
 volumes:
     db-data:
+secrets:
+    postgres-password:
+        file: postgres.password
 services:
     db:
         image: postgres:11.3
         restart: always
         environment:
-            POSTGRES_PASSWORD: example
+            POSTGRES_PASSWORD_FILE: /run/secrests/postgres-password
         volumes:
             - db-data:/var/lib/postgresql/data
         deploy:
             placement:
                 constraints:
                     - node.role == manager
+        secrets:
+            - postgres-password
     adminer:
         image: adminer
         restart: always
