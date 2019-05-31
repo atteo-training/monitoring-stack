@@ -11,6 +11,10 @@ services:
             POSTGRES_PASSWORD: example
         volumes:
             - db-data:/var/lib/postgresql/data
+        deploy:
+            placement:
+                constraints:
+                    - node.role == manager
     adminer:
         image: adminer
         restart: always
