@@ -1,8 +1,9 @@
-# Use postgres/example user/password credentials
-version: '3.1'
+version: '3.6'
 
 volumes:
     db-data:
+    prometheus-data:
+    elasticsearch-data:
 secrets:
     postgres-password:
         file: postgres.password
@@ -11,7 +12,7 @@ services:
         image: postgres:11.3
         restart: always
         environment:
-            POSTGRES_PASSWORD_FILE: /run/secrests/postgres-password
+            POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
         volumes:
             - db-data:/var/lib/postgresql/data
         deploy:
@@ -24,7 +25,7 @@ services:
         image: adminer
         restart: always
         ports:
-            - 8080:8080
+            - 8081:8080
     proxy:
         image: atteo/pluralizer-proxy:1.0
         deploy:
@@ -32,7 +33,7 @@ services:
         ports:
             - 80:80
     api:
-        image: atteo/pluralizer:1.0
+        image: atteo/pluralizer:2.0
         deploy:
             mode: replicated
             replicas: 2
@@ -41,3 +42,232 @@ services:
         deploy:
             mode: replicated
             replicas: 2
+    monitoring-proxy:
+        image: atteo/monitoring-proxy:1.0
+        deploy:
+            mode: replicated
+            replicas: 1
+        environment:
+            DOMAIN: locahost
+            LOGSPOUT: ignore
+            BACKEND_CADVISOR: cadvisor:8080
+            BACKEND_PROMETHEUS: prometheus:9090
+            BACKEND_GRAFANA: grafana:3000
+            BACKEND_NODE_EXPORTER: node-exporter:9100
+            BACKEND_KIBANA: kibana:5601
+            BACKEND_VISUALIZER: visualizer:8080
+        ports:
+            - target: 8080
+              published: 8080
+              protocol: tcp
+    visualizer:
+        image: dockersamples/visualizer
+        environment:
+            CTX_ROOT: /visualizer
+        deploy:
+            placement:
+                constraints:
+                    - node.role == manager
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+    cadvisor:
+        image: google/cadvisor:v0.33.0
+        logging:
+            driver: json-file
+            options:
+                max-size: 10m
+                max-file: 10
+        environment:
+            - LOGSPOUT=ignore
+        volumes:
+            - /:/rootfs:ro
+            - /var/run:/var/run:rw
+            - /sys:/sys:ro
+            - /var/lib/docker/:/var/lib/docker:ro
+        labels:
+            com.docker.stack.namespace: "monitoring"
+            com.docker.service.name: "cadvisor"
+        deploy:
+            mode: global
+            update_config:
+                parallelism: 1
+                delay: 60s
+            restart_policy:
+                condition: on-failure
+                max_attempts: 5
+            labels:
+                com.docker.stack.namespace: "monitoring"
+                com.docker.service.name: "cadvisor"
+    node-exporter:
+        image: quay.io/prometheus/node-exporter:v0.17.0
+        logging:
+            driver: json-file
+            options:
+                max-size: 10m
+                max-file: 10
+        environment:
+            - LOGSPOUT=ignore
+            - HOST_HOSTNAME=/etc/hostname
+        volumes:
+            - /:/rootfs:ro,rslave
+            - /etc/hostname:/etc/hostname
+        command: [ --path.rootfs=/host ]
+        labels:
+            com.docker.stack.namespace: "monitoring"
+            com.docker.service.name: "node-exporter"
+        deploy:
+            mode: global
+            update_config:
+                parallelism: 1
+                delay: 60s
+            restart_policy:
+                condition: on-failure
+                max_attempts: 5
+            labels:
+                com.docker.stack.namespace: "monitoring"
+                com.docker.service.name: "node-exporter"
+
+    prometheus:
+        image: atteo/prometheus:1.0
+        logging:
+            driver: json-file
+            options:
+                max-size: 10m
+                max-file: 10
+        environment:
+            - LOGSPOUT=ignore
+        command: "--config.file=/etc/prometheus/prometheus.yml --web.external-url=https://localhost/prometheus --web.route-prefix=/prometheus"
+        labels:
+            com.docker.stack.namespace: "monitoring"
+            com.docker.service.name: "prometheus"
+        volumes:
+            - type: volume
+              source: prometheus-data
+              target: /prometheus
+        deploy:
+            mode: replicated
+            replicas: 1
+            update_config:
+                parallelism: 1
+                delay: 60s
+            restart_policy:
+                condition: on-failure
+                max_attempts: 5
+            labels:
+                com.docker.stack.namespace: "monitoring"
+                com.docker.service.name: "prometheus"
+            placement:
+                constraints:
+                    - node.role == manager
+    grafana:
+        image: atteo/grafana:1.0
+        logging:
+            driver: json-file
+            options:
+                max-size: 10m
+                max-file: 10
+        environment:
+            - LOGSPOUT=ignore
+            - GF_SERVER_ROOT_URL=http://localhost:8080/grafana
+            - GF_SECURITY_ADMIN_USER=admin
+            - GF_SECURITY_ADMIN_PASSWORD=admin
+            - GF_AUTH_ANONYMOUS_ENABLED=true
+            - PROMETHEUS_ENDPOINT=http://prometheus:9090/prometheus
+            - ELASTICSEARCH_ENDPOINT=http://elasticsearch:9200/
+            - ALERT_EMAILS=slawek.piotrowski@gmail.com;karol.wisniewski@ecom.software;milosz.kowalczyk@ecom.software
+            - GF_INSTALL_PLUGINS=jdbranham-diagram-panel,grafana-azure-monitor-datasource,grafana-clock-panel
+            - THEME=${GRAFANA_THEME}
+            - ENV_NAME
+            - GRAFANA_AZURE_SUBSCRIPTION_ID
+            - GRAFANA_AZURE_TENANT_ID
+            - GRAFANA_AZURE_CLIENT_ID
+            - GRAFANA_AZURE_CLIENT_SECRET
+            - EMAIL_USER=monitoring@atteo.com
+            - EMAIL_FROM=monitoring@atteo.com
+            - "EMAIL_PASSWORD=todo"
+            - EMAIL_HOST=todo:587
+        labels:
+            com.docker.stack.namespace: "monitoring"
+            com.docker.service.name: "grafana"
+        deploy:
+            mode: replicated
+            replicas: 1
+            update_config:
+                parallelism: 1
+                delay: 60s
+            restart_policy:
+                condition: on-failure
+                max_attempts: 5
+            labels:
+                com.docker.stack.namespace: "monitoring"
+                com.docker.service.name: "grafana"
+    elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:6.3.1
+        logging:
+            driver: json-file
+            options:
+                max-size: 10m
+                max-file: 10
+        environment:
+            - LOGSPOUT=ignore
+            # Elastic executes mlockall call on Linux to prevent it from swapping
+            # This causes crash due to the out of memory error on our small machine
+            - bootstrap.memory_lock=false
+            - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+            - xpack.security.enabled=false
+        ulimits:
+            memlock:
+                soft: -1
+                hard: -1
+            nofile:
+                soft: 65536
+                hard: 65536
+        volumes:
+            - type: volume
+              source: elasticsearch-data
+              target: /usr/share/elasticsearch/data
+        deploy:
+            mode: replicated
+            replicas: 1
+    kibana:
+        image: atteo/kibana:1.0
+        logging:
+            driver: json-file
+            options:
+                max-size: 10m
+                max-file: 10
+        environment:
+            - LOGSPOUT=ignore
+            - ELASTICSEARCH_URL=http://elasticsearch:9200
+        deploy:
+            mode: replicated
+            replicas: 1
+    logstash:
+        image: atteo/logstash:1.0
+        logging:
+            driver: json-file
+            options:
+                max-size: 10m
+                max-file: 10
+        deploy:
+            mode: replicated
+            replicas: 1
+        environment:
+            - LOGSPOUT=ignore
+            - ELASTICSEARCH_ADDRESS=elasticsearch:9200
+            - XPACK_MONITORING_ENABLED=false
+            - LOG_LEVEL=info
+    logspout:
+        image: atteo/logspout:1.0
+        logging:
+            driver: json-file
+            options:
+                max-size: 10m
+                max-file: 10
+        environment:
+            - LOGSPOUT=ignore
+            - ROUTE_URIS=logstash://logstash:5000
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+        deploy:
+            mode: global
